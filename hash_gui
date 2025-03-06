@@ -1,0 +1,110 @@
+import hashlib
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+import os
+
+class HashVerifier:
+    """Clase para calcular y verificar hashes de archivos."""
+
+    def __init__(self, algoritmo="sha256"):
+        self.algoritmo = algoritmo
+
+    def calcular_hash(self, archivo):
+        """Calcula el hash de un archivo en bloques para soportar archivos grandes."""
+        hash_func = getattr(hashlib, self.algoritmo)()
+        total_size = os.path.getsize(archivo)
+        processed_size = 0
+
+        with open(archivo, "rb") as f:
+            while chunk := f.read(4096):  # Leer en bloques de 4 KB
+                hash_func.update(chunk)
+                processed_size += len(chunk)
+                yield processed_size / total_size * 100  # Progreso en %
+
+        yield hash_func.hexdigest()  # Retorna el hash final
+
+
+class HashApp:
+    """Interfaz gráfica para el verificador de integridad de archivos."""
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Verificador de Hashes")
+        self.root.geometry("500x400")
+
+        # Variables
+        self.archivo_path = tk.StringVar()
+        self.hash_ingresado = tk.StringVar()
+        self.algoritmo = tk.StringVar(value="sha256")
+
+        # Interfaz gráfica
+        self.create_widgets()
+
+    def create_widgets(self):
+        """Crea los elementos de la interfaz gráfica."""
+        tk.Label(self.root, text="Seleccione un archivo:", font=("Arial", 12)).pack(pady=5)
+        tk.Entry(self.root, textvariable=self.archivo_path, width=50, state="readonly").pack()
+        tk.Button(self.root, text="Buscar", command=self.seleccionar_archivo).pack(pady=5)
+
+        tk.Label(self.root, text="Seleccione algoritmo:", font=("Arial", 12)).pack(pady=5)
+        tk.OptionMenu(self.root, self.algoritmo, "md5", "sha1", "sha256", "sha512").pack()
+
+        tk.Label(self.root, text="Hash Calculado / Ingresado:", font=("Arial", 12)).pack(pady=5)
+        self.entry_hash = tk.Entry(self.root, textvariable=self.hash_ingresado, width=50)
+        self.entry_hash.pack()
+
+        self.progress = ttk.Progressbar(self.root, length=300, mode="determinate")
+        self.progress.pack(pady=5)
+
+        tk.Button(self.root, text="Generar Hash", command=self.generar_hash).pack(pady=5)
+        tk.Button(self.root, text="Verificar Hash", command=self.verificar_hash).pack(pady=5)
+
+    def seleccionar_archivo(self):
+        """Abre el explorador de archivos para seleccionar un archivo."""
+        archivo = filedialog.askopenfilename()
+        if archivo:
+            self.archivo_path.set(archivo)
+
+    def generar_hash(self):
+        """Genera el hash del archivo seleccionado con barra de progreso."""
+        archivo = self.archivo_path.get()
+        if not archivo:
+            messagebox.showerror("Error", "Seleccione un archivo primero.")
+            return
+
+        self.progress["value"] = 0
+        self.root.update_idletasks()
+
+        hash_verifier = HashVerifier(self.algoritmo.get())
+
+        for progress in hash_verifier.calcular_hash(archivo):
+            if isinstance(progress, str):  # Hash final
+                self.hash_ingresado.set(progress)
+                messagebox.showinfo("Hash Calculado", f"Hash generado:\n{progress}")
+            else:  # Actualiza barra de progreso
+                self.progress["value"] = progress
+                self.root.update_idletasks()
+
+    def verificar_hash(self):
+        """Verifica si el hash ingresado coincide con el hash del archivo."""
+        archivo = self.archivo_path.get()
+        hash_ingresado = self.hash_ingresado.get()
+
+        if not archivo or not hash_ingresado:
+            messagebox.showerror("Error", "Seleccione un archivo e ingrese un hash para verificar.")
+            return
+
+        hash_verifier = HashVerifier(self.algoritmo.get())
+
+        for progress in hash_verifier.calcular_hash(archivo):
+            if isinstance(progress, str):  # Hash final
+                hash_calculado = progress
+                if hash_calculado == hash_ingresado:
+                    messagebox.showinfo("Verificación", "✅ El archivo es íntegro (hash válido).")
+                else:
+                    messagebox.showwarning("Verificación", "❌ Archivo modificado o hash incorrecto.")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = HashApp(root)
+    root.mainloop()
