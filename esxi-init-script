@@ -1,0 +1,98 @@
+bash
+CopyEdit
+#!/bin/bash
+set -e
+
+# === CONFIGURATION ===
+USERNAME="ubuntu"  # Match with the Ubuntu install
+SSH_PUBKEY="ssh-ed25519 AAAAC3NzaC1... yourname@domain.com"
+DOCKER_COMPOSE_VERSION="2.27.0"
+BACKUP_DIR="/opt/backup"
+CRON_SCHEDULE="0 2 * * *"
+
+# === SYSTEM UPDATE & ESSENTIALS ===
+apt update && apt upgrade -y
+apt install -y sudo curl vim ufw fail2ban unattended-upgrades net-tools gnupg \
+    lsb-release ca-certificates software-properties-common open-vm-tools
+
+# === ENABLE VMWARE TOOLS SERVICE ===
+systemctl enable open-vm-tools
+systemctl start open-vm-tools
+
+# === SSH KEY SETUP ===
+mkdir -p /home/$USERNAME/.ssh
+echo "$SSH_PUBKEY" > /home/$USERNAME/.ssh/authorized_keys
+chmod 700 /home/$USERNAME/.ssh
+chmod 600 /home/$USERNAME/.ssh/authorized_keys
+chown -R $USERNAME:$USERNAME /home/$USERNAME/.ssh
+
+# === SSH HARDENING ===
+sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+systemctl restart sshd
+
+# === DOCKER INSTALLATION ===
+curl -fsSL https://get.docker.com | sh
+usermod -aG docker $USERNAME
+
+# === DOCKER COMPOSE ===
+curl -L "https://github.com/docker/compose/releases/download/v$DOCKER_COMPOSE_VERSION/docker-compose-$(uname -s)-$(uname -m)" \
+    -o /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
+
+# === FIREWALL CONFIGURATION ===
+ufw allow OpenSSH
+ufw --force enable
+
+# === FAIL2BAN CONFIGURATION ===
+systemctl enable fail2ban
+systemctl start fail2ban
+
+# === AUTO SECURITY UPDATES ===
+dpkg-reconfigure --priority=low unattended-upgrades
+
+# === OPTIONAL BACKUP CRON JOB ===
+mkdir -p $BACKUP_DIR
+chown $USERNAME:$USERNAME $BACKUP_DIR
+(crontab -l -u $USERNAME 2>/dev/null; echo "$CRON_SCHEDULE tar -czf $BACKUP_DIR/backup_\$(date +\%F).tar.gz /home/$USERNAME") | crontab -u $USERNAME -
+
+# === CLEANUP FOR TEMPLATE ===
+rm -f /etc/ssh/ssh_host_*
+truncate -s 0 /var/log/wtmp /var/log/btmp
+history -c && unset HISTFILE
+apt clean
+
+# === FIRST BOOT SCRIPT ===
+cat << 'EOF' > /usr/local/bin/firstboot.sh
+#!/bin/bash
+NEW_HOSTNAME="vm-$(openssl rand -hex 3)"
+hostnamectl set-hostname $NEW_HOSTNAME
+sed -i "/127.0.1.1/d" /etc/hosts
+echo "127.0.1.1 $NEW_HOSTNAME" >> /etc/hosts
+echo "[+] Hostname set to $NEW_HOSTNAME"
+dpkg-reconfigure openssh-server
+systemctl disable firstboot.service
+rm -f /usr/local/bin/firstboot.sh
+EOF
+
+chmod +x /usr/local/bin/firstboot.sh
+
+# === FIRST BOOT SYSTEMD UNIT ===
+cat << EOF > /etc/systemd/system/firstboot.service
+[Unit]
+Description=Run once on first boot to randomize hostname and regenerate SSH keys
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/firstboot.sh
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl enable firstboot.service
+
+echo "✅ Base VM setup complete. Power off and export the VM as an OVA to reuse as a template."
+
