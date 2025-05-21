@@ -1,0 +1,76 @@
+#!/bin/bash
+
+# Exit on errors
+set -e
+
+# === CONFIGURATION ===
+NEW_USER="secops"
+SUDO_PRIVILEGE=true  # Set false to skip adding sudo rights
+
+# === CREATE USER ===
+echo "[+] Creating user: $NEW_USER"
+if id "$NEW_USER" &>/dev/null; then
+    echo "[-] User $NEW_USER already exists. Skipping creation."
+else
+    useradd -m -s /bin/bash "$NEW_USER"
+    echo "[+] Setting password for $NEW_USER"
+    passwd "$NEW_USER"
+    if [ "$SUDO_PRIVILEGE" = true ]; then
+        echo "[+] Adding $NEW_USER to sudo group"
+        usermod -aG sudo "$NEW_USER"
+    fi
+fi
+
+# === INSTALL BASE PACKAGES ===
+echo "[+] Installing fail2ban, net-tools, git, curl"
+apt update
+apt install -y fail2ban net-tools git curl
+
+# === CHECK FOR DOCKER INSTALLATION ===
+echo "[+] Checking if Docker is installed..."
+if command -v docker &>/dev/null; then
+    echo "[✓] Docker is already installed. Skipping."
+else
+    echo "[!] Docker is not installed. You can install it manually if needed."
+fi
+
+# === SSH SETUP FOR USER ===
+echo "[+] Setting up SSH for $NEW_USER"
+mkdir -p /home/"$NEW_USER"/.ssh
+if [ -f /root/.ssh/authorized_keys ]; then
+    cp /root/.ssh/authorized_keys /home/"$NEW_USER"/.ssh/
+    chmod 700 /home/"$NEW_USER"/.ssh
+    chmod 600 /home/"$NEW_USER"/.ssh/authorized_keys
+    chown -R "$NEW_USER":"$NEW_USER" /home/"$NEW_USER"/.ssh
+    echo "[✓] SSH keys copied from root"
+else
+    echo "[!] No /root/.ssh/authorized_keys file found. Skipping key copy."
+fi
+
+# === SSH HARDENING ===
+echo "[+] Hardening SSH configuration"
+
+SSH_CONFIG="/etc/ssh/sshd_config"
+BACKUP_PATH="${SSH_CONFIG}.bak.$(date +%F-%T)"
+cp "$SSH_CONFIG" "$BACKUP_PATH"
+
+# Apply hardening rules
+sed -i 's/^#\?\(PermitRootLogin\s*\).*$/\1no/' "$SSH_CONFIG"
+sed -i 's/^#\?\(PasswordAuthentication\s*\).*$/\1no/' "$SSH_CONFIG"
+sed -i 's/^#\?\(X11Forwarding\s*\).*$/\1no/' "$SSH_CONFIG"
+sed -i 's/^#\?\(PermitEmptyPasswords\s*\).*$/\1no/' "$SSH_CONFIG"
+sed -i 's/^#\?\(UsePAM\s*\).*$/\1yes/' "$SSH_CONFIG"
+
+# Prevent duplicate AllowUsers
+grep -q "^AllowUsers $NEW_USER" "$SSH_CONFIG" || echo "AllowUsers $NEW_USER" >> "$SSH_CONFIG"
+
+# Restart SSH
+echo "[+] Restarting SSH service"
+systemctl restart ssh
+
+# === FAIL2BAN CONFIGURATION ===
+echo "[+] Enabling fail2ban service"
+systemctl enable fail2ban
+systemctl start fail2ban
+
+echo "[✓] Setup complete. User: $NEW_USER with hardened SSH and fail2ban configured."
