@@ -1,0 +1,73 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    ports:
+      - "1883:1883"  # Requiere acceso externo para clientes MQTT
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    restart: unless-stopped
+    networks:
+      - proxy-tier
+
+  influxdb:
+    image: influxdb:latest
+    container_name: influxdb
+    # No se expone el puerto 8086 al host
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=admin123
+      - DOCKER_INFLUXDB_INIT_ORG=iot-org
+      - DOCKER_INFLUXDB_INIT_BUCKET=alertas
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=supersecrettoken
+    volumes:
+      - ./influxdb:/var/lib/influxdb2
+    restart: unless-stopped
+    networks:
+      - proxy-tier
+
+  telegraf:
+    image: telegraf:latest
+    container_name: telegraf
+    depends_on:
+      - mosquitto
+      - influxdb
+    volumes:
+      - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    restart: unless-stopped
+    networks:
+      - proxy-tier
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    # No se expone el puerto 3000 al host
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana:/var/lib/grafana
+    restart: unless-stopped
+    networks:
+      - proxy-tier
+
+  npm:
+    image: jc21/nginx-proxy-manager:latest
+    container_name: nginx-proxy-manager
+    restart: unless-stopped
+    ports:
+      - "80:80"     # HTTP público
+      - "443:443"   # HTTPS público
+      - "81:81"     # UI administrativa de NPM
+    volumes:
+      - ./npm/data:/data
+      - ./npm/letsencrypt:/etc/letsencrypt
+    networks:
+      - proxy-tier
+
+networks:
+  proxy-tier:
+    driver: bridge
